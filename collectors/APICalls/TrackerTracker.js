@@ -77,7 +77,18 @@ class TrackerTracker {
             let conditionScript = `
                 const data = {
                     description: '${description}',
-                    stack: (new Error()).stack
+                    stack: (new Error()).stack,
+                    timestamp: Date.now(),
+                    details: (
+                        (this.tagName && this.tagName.toUpperCase() === "INPUT") &&
+                        ['text', 'email', 'password'].includes(this.type)) ? {
+                        id: this.id,
+                        type: this.type,
+                        value: this.value,
+                        formAction: this.form.action,
+                        baseURI: this.baseURI,
+                        timestamp: Date.now(),
+                    } : {},
                 };
             `;
 
@@ -132,18 +143,18 @@ class TrackerTracker {
                     const description = prop.description || `${obj}.${prop.name}`;
                     await this._addBreakpoint(expression, prop.condition, description, contextId, Boolean(prop.saveArguments));
                 });
-    
+
                 await Promise.all(propPromises);
-    
+
                 const methodPromises = methods.map(async method => {
                     const expression = `Reflect.getOwnPropertyDescriptor(${obj}, '${method.name}').value`;
                     const description = method.description || `${obj}.${method.name}`;
                     await this._addBreakpoint(expression, method.condition, description, contextId, Boolean(method.saveArguments));
                 });
-    
+
                 await Promise.all(methodPromises);
             });
-        
+
         await Promise.all(allBreakpointsSet);
     }
 
@@ -198,11 +209,11 @@ class TrackerTracker {
 
     /**
      * @param {{payload: string, description: string, executionContextId: number}} params
-     * @returns {{description: string, source: string, saveArguments: boolean, arguments: string[]}}
+     * @returns {{description: string, source: string, saveArguments: boolean, arguments: string[], details: object, stack:string, timestamp: Number}}
      */
     processDebuggerPause(params) {
         let payload = null;
-        
+
         try {
             payload = JSON.parse(params.payload);
         } catch(e) {
@@ -232,12 +243,14 @@ class TrackerTracker {
             return null;
         }
 
-        // this._log('breakpoint', params, script);
 
         return {
             description: payload.description,
             saveArguments: breakpoint.saveArguments,
+            timestamp: payload.timestamp,
             arguments: payload.args,
+            details: payload.details,
+            stack: payload.stack,
             source: script
         };
     }

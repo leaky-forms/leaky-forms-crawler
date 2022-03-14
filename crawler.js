@@ -1,12 +1,35 @@
 /* eslint-disable max-lines */
-const puppeteer = require('puppeteer');
+const fs = require('fs');
+// @ts-ignore
+let puppeteer = null;
+const TAKE_HOMEPAGE_SCREENSHOT = true;
+const SAVE_HOMEPAGE_HTML = true;
+const USE_STEALTH = false;
+if (USE_STEALTH) {
+    puppeteer = require('puppeteer-extra');
+    const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+    // @ts-ignore
+    puppeteer.use(StealthPlugin());
+} else {
+    puppeteer = require('puppeteer');
+}
+const path = require('path');
+const pageUtils = require('./helpers/utils');
+const cmpDetectorSource = fs.readFileSync('./helpers/cmpDetect.js', 'utf8');
+const ENABLE_CMP_EXTENSION = true;
+const CMP_ACTION ='NO_ACTION';  //Values can be 'NO_ACTION', 'ACCEPT_ALL', 'REJECT_ALL'
 const chalk = require('chalk').default;
 const {createTimer} = require('./helpers/timer');
 const wait = require('./helpers/wait');
 const tldts = require('tldts');
 
-const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.63 Safari/537.36';
-const MOBILE_USER_AGENT = 'Mozilla/5.0 (Linux; Android 10; Pixel 2 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.63 Mobile Safari/537.36';
+const ENABLE_CHALK = false;
+const MAX_LOAD_TIME = 120000;  //ms
+const MAX_TOTAL_TIME = 240000;  //ms
+const EXECUTION_WAIT_TIME = 2500;  //ms
+
+const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 11_2_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.146 Safari/537.36';
+const MOBILE_USER_AGENT = 'Mozilla/5.0 (Linux; Android 10; Pixel 2 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.146 Mobile Safari/537.36';
 
 const DEFAULT_VIEWPORT = {
     width: 1440,//px
@@ -23,22 +46,22 @@ const MOBILE_VIEWPORT = {
 // for debugging: will lunch in window mode instad of headless, open devtools and don't close windows after process finishes
 const VISUAL_DEBUG = false;
 
+chalk.enabled = ENABLE_CHALK;
+
 /**
  * @param {function(...any):void} log
  * @param {string} proxyHost
- * @param {string} executablePath path to chromium executable to use
  */
-function openBrowser(log, proxyHost, executablePath) {
+function openBrowser(log, proxyHost) {
+    let args = {};
     /**
-     * @type {import('puppeteer').BrowserLaunchArgumentOptions}
+     * @type {import('puppeteer').LaunchOptions}
      */
-    const args = {
-        args: [
+    args.args = [
             // enable FLoC
             '--enable-blink-features=InterestCohortAPI',
             '--enable-features="FederatedLearningOfCohorts:update_interval/10s/minimum_history_domain_size_required/1,FlocIdSortingLshBasedComputation,InterestCohortFeaturePolicy"'
-        ]
-    };
+        ];
     if (VISUAL_DEBUG) {
         args.headless = false;
         args.devtools = true;
@@ -54,10 +77,9 @@ function openBrowser(log, proxyHost, executablePath) {
         args.args.push(`--proxy-server=${proxyHost}`);
         args.args.push(`--host-resolver-rules="MAP * ~NOTFOUND , EXCLUDE ${url.hostname}"`);
     }
-    if (executablePath) {
-        // @ts-ignore there is no single object that encapsulates properties of both BrowserLaunchArgumentOptions and LaunchOptions that are allowed here
-        args.executablePath = executablePath;
-    }
+    args.ignoreHTTPSErrors = true;
+    // for debugging: use different version of Chromium/Chrome
+    // args.executablePath = "/Applications/Google\ Chrome\ Canary.app/Contents/MacOS/Google\ Chrome\ Canary";
 
     return puppeteer.launch(args);
 }
@@ -65,7 +87,7 @@ function openBrowser(log, proxyHost, executablePath) {
 /**
  * @param {puppeteer.BrowserContext} context
  * @param {URL} url
- * @param {{collectors: import('./collectors/BaseCollector')[], log: function(...any):void, urlFilter: function(string, string):boolean, emulateMobile: boolean, emulateUserAgent: boolean, runInEveryFrame: function():void, maxLoadTimeMs: number, extraExecutionTimeMs: number}} data
+ * @param {{collectors: import('./collectors/BaseCollector')[], log: function(...any):void, urlFilter: function(string, string):boolean, emulateMobile: boolean, emulateUserAgent: boolean, outputPath: string, emailAddress: string, passwordValue: string}} data
  *
  * @returns {Promise<CollectResult>}
  */
@@ -75,9 +97,9 @@ async function getSiteData(context, url, {
     urlFilter,
     emulateUserAgent,
     emulateMobile,
-    runInEveryFrame,
-    maxLoadTimeMs,
-    extraExecutionTimeMs
+    outputPath,
+    emailAddress,
+    passwordValue
 }) {
     const testStarted = Date.now();
 
@@ -105,18 +127,19 @@ async function getSiteData(context, url, {
     }
 
     let pageTargetCreated = false;
+    let pageLoaded = false;
 
     // initiate collectors for all contexts (main page, web worker, service worker etc.)
     context.on('targetcreated', async target => {
         // we have already initiated collectors for the main page, so we ignore the first page target
-        if (target.type() === 'page' && !pageTargetCreated) {
+        if (target.type() === 'page' && !pageTargetCreated && !pageLoaded) {
             pageTargetCreated = true;
             return;
         }
 
         const timer = createTimer();
         let cdpClient = null;
-        
+
         try {
             cdpClient = await target.createCDPSession();
         } catch (e) {
@@ -124,7 +147,7 @@ async function getSiteData(context, url, {
             return;
         }
 
-        const simpleTarget = {url: target.url(), type: target.type(), cdpClient};
+        const simpleTarget = {url: target.url(), type: target.type(), cdpClient, pageLoaded};
         targets.push(simpleTarget);
 
         try {
@@ -158,12 +181,6 @@ async function getSiteData(context, url, {
 
     // Create a new page in a pristine context.
     const page = await context.newPage();
-
-    // optional function that should be run on every page (and subframe) in the browser context
-    if (runInEveryFrame) {
-        page.evaluateOnNewDocument(runInEveryFrame);
-    }
-
     // We are creating CDP connection before page target is created, if we create it only after
     // new target is created we will miss some requests, API calls, etc.
     const cdpClient = await page.target().createCDPSession();
@@ -175,7 +192,7 @@ async function getSiteData(context, url, {
     for (let collector of collectors) {
         try {
             // eslint-disable-next-line no-await-in-loop
-            await collector.addTarget({url: url.toString(), type: 'page', cdpClient});
+            await collector.addTarget({url: url.toString(), type: 'page', cdpClient, page, pageLoaded});
         } catch (e) {
             log(chalk.yellow(`${collector.id()} failed to attach to page`), chalk.gray(e.message), chalk.gray(e.stack));
         }
@@ -187,7 +204,9 @@ async function getSiteData(context, url, {
     }
 
     page.setViewport(emulateMobile ? MOBILE_VIEWPORT : DEFAULT_VIEWPORT);
-
+    if(ENABLE_CMP_EXTENSION) {
+        await page.evaluateOnNewDocument(cmpDetectorSource);
+    }
     // if any prompts open on page load, they'll make the page hang unless closed
     page.on('dialog', dialog => dialog.dismiss());
 
@@ -196,8 +215,10 @@ async function getSiteData(context, url, {
 
     let timeout = false;
 
+    const loadPageTimer = createTimer();
     try {
-        await page.goto(url.toString(), {timeout: maxLoadTimeMs, waitUntil: 'networkidle0'});
+        await page.goto(url.toString(), {timeout: MAX_LOAD_TIME, waitUntil: 'load'});
+        pageLoaded = true;
     } catch (e) {
         if (e instanceof puppeteer.errors.TimeoutError || (e.name && e.name === 'TimeoutError')) {
             log(chalk.yellow('Navigation timeout exceeded.'));
@@ -213,11 +234,28 @@ async function getSiteData(context, url, {
             throw e;
         }
     }
-
-    // give website a bit more time for things to settle
-    await page.waitForTimeout(extraExecutionTimeMs);
-
+    await page.waitForTimeout(EXECUTION_WAIT_TIME);
     const finalUrl = page.url();
+    const urlStr = url.toString();
+    const homepageLoadTime = parseFloat(loadPageTimer.getElapsedTime());
+    log(`Loaded ${urlStr} in ${loadPageTimer.getElapsedTime()}s (finalUrl: ${finalUrl})`);
+    if(TAKE_HOMEPAGE_SCREENSHOT) {
+        const filePathForSs = path.join(outputPath, `${url.hostname}_after_page_load`);
+        await page.screenshot({path: filePathForSs + '.png'});
+    }
+    if(SAVE_HOMEPAGE_HTML) {
+        const filePathForHTML = path.join(outputPath, `${url.hostname}_after_page_load`);
+        let bodyHTML = await page.evaluate(() => document.body.innerHTML);
+        fs.writeFileSync(filePathForHTML + '.html', bodyHTML);
+    }
+    if(ENABLE_CMP_EXTENSION) {
+        try {
+            await pageUtils.findCMP(page, log, CMP_ACTION);
+        } catch (error) {
+            log('Error while detecting CMP', error.message);
+        }
+    }
+
     /**
      * @type {Object<string, Object>}
      */
@@ -229,7 +267,14 @@ async function getSiteData(context, url, {
             // eslint-disable-next-line no-await-in-loop
             const collectorData = await collector.getData({
                 finalUrl,
-                urlFilter: urlFilter && urlFilter.bind(null, finalUrl)
+                urlFilter: urlFilter && urlFilter.bind(null, finalUrl),
+                page,
+                outputPath,
+                context,
+                homepageLoadTime,
+                emulateMobile,
+                emailAddress,
+                passwordValue
             });
             data[collector.id()] = collectorData;
             log(`getting ${collector.id()} data took ${getDataTimer.getElapsedTime()}s`);
@@ -275,20 +320,15 @@ function isThirdPartyRequest(documentUrl, requestUrl) {
 
 /**
  * @param {URL} url
- * @param {{collectors?: import('./collectors/BaseCollector')[], log?: function(...any):void, filterOutFirstParty?: boolean, emulateMobile?: boolean, emulateUserAgent?: boolean, proxyHost?: string, browserContext?: puppeteer.BrowserContext, runInEveryFrame?: function():void, executablePath?: string, maxLoadTimeMs?: number, extraExecutionTimeMs?: number}} options
+ * @param {{collectors?: import('./collectors/BaseCollector')[], log?: function(...any):void, filterOutFirstParty?: boolean, emulateMobile?: boolean, emulateUserAgent?: boolean, proxyHost?: string, browserContext?: puppeteer.BrowserContext, outputPath: string, emailAddress?: string, passwordValue: string}} options
  * @returns {Promise<CollectResult>}
  */
 module.exports = async (url, options) => {
     const log = options.log || (() => {});
-    const browser = options.browserContext ? null : await openBrowser(log, options.proxyHost, options.executablePath);
+    const browser = options.browserContext ? null : await openBrowser(log, options.proxyHost);
     // Create a new incognito browser context.
     const context = options.browserContext || await browser.createIncognitoBrowserContext();
-
     let data = null;
-
-    const maxLoadTimeMs = options.maxLoadTimeMs || 30000;
-    const extraExecutionTimeMs = options.extraExecutionTimeMs || 2500;
-    const maxTotalTimeMs = maxLoadTimeMs * 2;
 
     try {
         data = await wait(getSiteData(context, url, {
@@ -297,10 +337,10 @@ module.exports = async (url, options) => {
             urlFilter: options.filterOutFirstParty === true ? isThirdPartyRequest.bind(null) : null,
             emulateUserAgent: options.emulateUserAgent !== false, // true by default
             emulateMobile: options.emulateMobile,
-            runInEveryFrame: options.runInEveryFrame,
-            maxLoadTimeMs,
-            extraExecutionTimeMs
-        }), maxTotalTimeMs);
+            outputPath: options.outputPath,
+            emailAddress: options.emailAddress,
+            passwordValue: options.passwordValue
+        }), MAX_TOTAL_TIME);
     } catch(e) {
         log(chalk.red('Crawl failed'), e.message, chalk.gray(e.stack));
         throw e;
@@ -322,5 +362,5 @@ module.exports = async (url, options) => {
  * @property {boolean} timeout true if page didn't fully load before the timeout and loading had to be stopped by the crawler
  * @property {number} testStarted time when the crawl started (unix timestamp)
  * @property {number} testFinished time when the crawl finished (unix timestamp)
- * @property {import('./helpers/collectorsList').CollectorData} data object containing output from all collectors
+ * @property {any} data object containing output from all collectors
 */

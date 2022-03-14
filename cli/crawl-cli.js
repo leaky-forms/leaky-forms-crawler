@@ -3,81 +3,74 @@ const fs = require('fs');
 const chalk = require('chalk').default;
 const runCrawlers = require('../crawlerConductor');
 const program = require('commander');
+const ProgressBar = require('progress');
 const URL = require('url').URL;
+const crypto = require('crypto');
 const {getCollectorIds, createCollector} = require('../helpers/collectorsList');
-const {getReporterIds, createReporter} = require('../helpers/reportersList');
 const {metadataFileExists, createMetadataFile} = require('./metadataFile');
-const crawlConfig = require('./crawlConfig');
-const {createUniqueUrlName} = require('../helpers/hash');
-
 // eslint-disable-next-line no-unused-vars
 const BaseCollector = require('../collectors/BaseCollector');
-// eslint-disable-next-line no-unused-vars
-const BaseReporter = require('../reporters/BaseReporter');
 
 program
-    .option('-o, --output <path>', 'output folder')
+    .option('-o, --output <path>', '(required) output folder')
     .option('-u, --url <url>', 'single URL')
     .option('-i, --input-list <path>', 'path to list of URLs')
     .option('-d, --data-collectors <list>', `comma separated list of data collectors: ${getCollectorIds().join(', ')} (all by default)`)
-    .option('--reporters <list>', `comma separated list of reporters: ${getReporterIds().join(', ')}`)
-    .option('-l, --log-path <path>', 'instructs reporters where all logs should be written to')
-    .option('-v, --verbose', 'instructs reporters to log additional information (e.g. for "cli" reporter progress bar will not be shown when verbose logging is enabled)')
+    .option('-l, --log-file <path>', 'save log data to a file')
+    .option('-v, --verbose', 'print log data to the screen')
     .option('-c, --crawlers <number>', 'overwrite the default number of concurent crawlers')
     .option('-f, --force-overwrite', 'overwrite existing output files')
     .option('-3, --only-3p', 'don\'t save any first-party data')
     .option('-m, --mobile', 'emulate a mobile device')
     .option('-p, --proxy-config <host>', 'use an optional proxy configuration')
     .option('-r, --region-code <region>', 'optional 2 letter region code. Used for metadata only.')
-    .option('-a, --disable-anti-bot', 'disable anti bot detection protections injected to every frame')
-    .option('--config <path>', 'crawl configuration file')
-    .option('--chromium-version <version_number>', 'use custom version of chromium')
+    .option('-e, --email-address <path>', 'email address to fill')
+    .option('-w, --password-value <path>', 'password value to fill')
     .parse(process.argv);
 
 /**
- * @param {Array<string|{url:string, dataCollectors?:BaseCollector[]}>} inputUrls
+ * @param {string[]} inputUrls
  * @param {string} outputPath
  * @param {boolean} verbose
  * @param {string} logPath
  * @param {number} numberOfCrawlers
  * @param {BaseCollector[]} dataCollectors
- * @param {BaseReporter[]} reporters
  * @param {boolean} forceOverwrite
  * @param {boolean} filterOutFirstParty
  * @param {boolean} emulateMobile
  * @param {string} proxyHost
  * @param {string} regionCode
- * @param {boolean} antiBotDetection
- * @param {string} chromiumVersion
- * @param {number} maxLoadTimeMs
- * @param {number} extraExecutionTimeMs
+ * @param {string} emailAddress
+ * @param {string} passwordValue
  */
-async function run(inputUrls, outputPath, verbose, logPath, numberOfCrawlers, dataCollectors, reporters, forceOverwrite, filterOutFirstParty, emulateMobile, proxyHost, regionCode, antiBotDetection, chromiumVersion, maxLoadTimeMs, extraExecutionTimeMs) {
-    const startTime = new Date();
-
-    reporters.forEach(reporter => {
-        reporter.init({verbose, startTime, urls: inputUrls.length, logPath});
-    });
+async function run(inputUrls, outputPath, verbose, logPath, numberOfCrawlers, dataCollectors, forceOverwrite, filterOutFirstParty, emulateMobile, proxyHost, regionCode, emailAddress, passwordValue) {
+    const logFile = logPath ? fs.createWriteStream(logPath, {flags: 'w'}) : null;
 
     /**
      * @type {function(...any):void}
      */
     const log = (...msg) => {
-        reporters.forEach(reporter => {
-            reporter.log(...msg);
-        });
+        if (verbose) {
+            // eslint-disable-next-line no-console
+            console.log(...msg);
+        }
+
+        if (logFile) {
+            logFile.write(msg.join(' ') + '\n');
+        }
     };
 
     /**
      * @type {function(...any):string}
      * @param {URL} url
-     * @param {string} fileType file extension, defaults to 'json'
      */
-    const createOutputPath = ((url, fileType = 'json') => path.join(outputPath, `${createUniqueUrlName(url)}.${fileType}`));
+    const createOutputPath = (url => {
+        let hash = crypto.createHash('sha1').update(url.toString()).digest('hex');
+        hash = hash.substring(0, 4); // truncate to length 4
+        return path.join(outputPath, `${url.hostname}_${hash}.json`);
+    });
 
-    const urls = inputUrls.filter(item => {
-        const urlString = (typeof item === 'string') ? item : item.url;
-
+    const urls = inputUrls.filter(urlString => {
         /**
          * @type {URL}
          */
@@ -102,48 +95,35 @@ async function run(inputUrls, outputPath, verbose, logPath, numberOfCrawlers, da
         return true;
     });
 
-    const urlsLength = urls.length;
+    // show progress bar only if we are not printing all logs to screen (verbose)
+    const progressBar = (verbose || urls.length === 0) ? null : new ProgressBar('[:bar] :percent ETA :etas fail :fail% :site', {
+        complete: chalk.green('='),
+        incomplete: ' ',
+        total: urls.length,
+        width: 30
+    });
+
     let failures = 0;
     let successes = 0;
-
-    /**
-     * @type {Error}
-     */
-    let fatalError = null;
-
-    /**
-     * @type {Array<Array<number>>}
-     */
-    let crawlTimes = [];
-    
     // eslint-disable-next-line arrow-parens
-    const updateProgress = (/** @type {string} */site = '', /** @type {import('../crawler').CollectResult} */data) => {
-        reporters.forEach(reporter => {
-            reporter.update({site, successes, failures, urls: urlsLength, data, crawlTimes, fatalError, numberOfCrawlers, regionCode});
-        });
+    const updateProgress = (/** @type {string} */site = '') => {
+        if(progressBar) {
+            progressBar.tick({
+                site,
+                fail: (failures / (failures + successes) * 100).toFixed(1)
+            });
+        }
     };
 
     /**
      * @param {URL} url
-     * @param {import('../crawler').CollectResult} data
+     * @param {object} data
      */
     const dataCallback = (url, data) => {
         successes++;
-
-        crawlTimes.push([data.testStarted, data.testFinished, data.testFinished - data.testStarted]);
+        updateProgress(url.toString());
 
         const outputFile = createOutputPath(url);
-
-        // move screenshot to its own file and only keep screenshot path in the JSON data
-        if (data.data.screenshots) {
-            const screenshotFilename = createOutputPath(url, 'jpg');
-            fs.writeFileSync(screenshotFilename, Buffer.from(data.data.screenshots, 'base64'));
-
-            data.data.screenshots = screenshotFilename;
-        }
-
-        updateProgress(url.toString(), data);
-
         fs.writeFileSync(outputFile, JSON.stringify(data, null, 2));
     };
 
@@ -154,6 +134,17 @@ async function run(inputUrls, outputPath, verbose, logPath, numberOfCrawlers, da
         failures++;
         updateProgress(url);
     };
+
+    const startTime = new Date();
+
+    log(chalk.cyan(`Start time: ${startTime.toUTCString()}`));
+    log(chalk.cyan(`Number of urls to crawl: ${urls.length}`));
+
+    if (progressBar) {
+        progressBar.render();
+    }
+
+    let fatalError = null;
 
     try {
         await runCrawlers({
@@ -166,10 +157,9 @@ async function run(inputUrls, outputPath, verbose, logPath, numberOfCrawlers, da
             filterOutFirstParty,
             emulateMobile,
             proxyHost,
-            antiBotDetection,
-            chromiumVersion,
-            maxLoadTimeMs,
-            extraExecutionTimeMs
+            outputPath,
+            emailAddress,
+            passwordValue
         });
         log(chalk.green('\n✅ Finished successfully.'));
     } catch(e) {
@@ -179,7 +169,9 @@ async function run(inputUrls, outputPath, verbose, logPath, numberOfCrawlers, da
 
     const endTime = new Date();
 
-    await Promise.all(reporters.map(reporter => reporter.cleanup({endTime, successes, failures, urls: urlsLength})));
+    log(chalk.cyan(`Finish time: ${endTime.toUTCString()}`));
+    log(chalk.cyan(`Sucessful crawls: ${successes}/${urls.length} (${(successes / urls.length * 100).toFixed(2)}%)`));
+    log(chalk.cyan(`Failed crawls: ${failures}/${urls.length} (${(failures / urls.length * 100).toFixed(2)}%)`));
 
     createMetadataFile(outputPath, {
         startTime,
@@ -196,60 +188,71 @@ async function run(inputUrls, outputPath, verbose, logPath, numberOfCrawlers, da
         urls: inputUrls.length,
         skipped: inputUrls.length - urls.length
     });
+
+    process.exit(0);  // otherwise the crawler doesn't terminate when there's an error
 }
 
-// @ts-ignore
-const config = crawlConfig.figureOut(program);
+const verbose = Boolean(program.verbose);
+const forceOverwrite = Boolean(program.forceOverwrite);
+const filterOutFirstParty = Boolean(program.only3p);
+const emulateMobile = Boolean(program.mobile);
 
-/**
- * @type {BaseCollector[]}
- */
 let dataCollectors = null;
+let urls = null;
 
-if (config.dataCollectors) {
-    dataCollectors = config.dataCollectors.map(id => createCollector(id));
+if (typeof program.dataCollectors === 'string') {
+    let dataCollectorsIds = program.dataCollectors.split(',').map(n => n.trim()).filter(n => n.length > 0);
+    for (const collectorId of ['emailPasswordFields']) {
+        if (dataCollectorsIds.includes(collectorId)) {
+            if (dataCollectorsIds[0] !== collectorId) {
+                dataCollectorsIds = dataCollectorsIds.filter(item => item !== collectorId);
+                dataCollectorsIds.unshift(collectorId);
+                console.log(chalk.yellow(`${collectorId} prepended to the beginning of the data collectors.`));
+            }
+        }
+    }
+
+    dataCollectors = [];
+
+    dataCollectorsIds.forEach(id => {
+        if (!getCollectorIds().includes(id)) {
+            // eslint-disable-next-line no-console
+            console.log(chalk.red(`Unknown collector "${id}".`), `Valid collector names are: ${getCollectorIds().join(', ')}.`);
+            process.exit(1);
+        }
+
+        dataCollectors.push(createCollector(id));
+    });
 } else {
     dataCollectors = getCollectorIds().map(id => createCollector(id));
 }
 
-/**
- * @type {BaseReporter[]}
- */
-let reporters = null;
-
-if (config.reporters) {
-    reporters = config.reporters.map(id => createReporter(id));
-} else {
-    reporters = [createReporter('cli')];
+if (program.url) {
+    urls = [program.url];
+} else if(program.inputList) {
+    urls = fs.readFileSync(program.inputList).toString().split('\n').map(u => u.trim());
 }
 
-if (!config.urls || !config.output) {
+if (!urls || !program.output) {
     program.help();
+    process.exit(1);
 } else {
-    if (fs.existsSync(config.output)) {
-        if (metadataFileExists(config.output) && !config.forceOverwrite) {
+    urls = urls.map(url => {
+        if (url.startsWith('http://') || url.startsWith('https://')) {
+            return url;
+        }
+        return `http://${url}`;
+    });
+
+    if (fs.existsSync(program.output)) {
+        if (metadataFileExists(program.output) && !forceOverwrite) {
             // eslint-disable-next-line no-console
             console.log(chalk.red('Output folder already exists and contains metadata file.'), 'Use -f to overwrite.');
             process.exit(1);
         }
     } else {
-        fs.mkdirSync(config.output);
+        fs.mkdirSync(program.output);
     }
 
-    /**
-     * @type {Array<string|{url:string, dataCollectors:BaseCollector[]}>}
-     */
-    // @ts-ignore typescript doesn't understand that all string[] will be converted to BaseCollector[]
-    const urls = config.urls.map(item => {
-        if (typeof item !== 'string' && item.dataCollectors) {
-            return {
-                url: item.url,
-                dataCollectors: item.dataCollectors.map(id => createCollector(id))
-            };
-        }
-        
-        return item;
-    });
-
-    run(urls, config.output, config.verbose, config.logPath, config.crawlers || null, dataCollectors, reporters, config.forceOverwrite, config.filterOutFirstParty, config.emulateMobile, config.proxyConfig, config.regionCode, !config.disableAntiBot, config.chromiumVersion, config.maxLoadTimeMs, config.extraExecutionTimeMs);
+    run(urls, program.output, verbose, program.logFile, program.crawlers || null, dataCollectors, forceOverwrite, filterOutFirstParty, emulateMobile, program.proxyConfig, program.regionCode, program.emailAddress, program.passwordValue);
 }

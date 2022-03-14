@@ -48,6 +48,7 @@ function createMetadataFile(outputPath, {startTime, endTime, urls, successes, fa
     }, null, 2));
 }
 
+
 module.exports = {
     createMetadataFile,
     metadataFileExists

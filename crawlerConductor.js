@@ -6,33 +6,33 @@ const crawl = require('./crawler');
 const URL = require('url').URL;
 const {createTimer} = require('./helpers/timer');
 const createDeferred = require('./helpers/deferred');
-const downloadCustomChromium = require('./helpers/downloadCustomChromium');
 // eslint-disable-next-line no-unused-vars
 const BaseCollector = require('./collectors/BaseCollector');
-const notABot = require('./helpers/notABot');
 
-const MAX_NUMBER_OF_CRAWLERS = 38;// by trial and error there seems to be network bandwidth issues with more than 38 browsers. 
-const MAX_NUMBER_OF_RETRIES = 2;
+const ENABLE_CHALK = false;
+const MAX_NUMBER_OF_CRAWLERS = 38;// by trial and error there seems to be network bandwidth issues with more than 38 browsers.
+const MAX_NUMBER_OF_RETRIES = 1;
+
+chalk.enabled = ENABLE_CHALK;
 
 /**
- * @param {string} urlString 
+ * @param {string} urlString
  * @param {BaseCollector[]} dataCollectors
- * @param {function} log 
+ * @param {function} log
  * @param {boolean} filterOutFirstParty
  * @param {function(URL, import('./crawler').CollectResult): void} dataCallback 
  * @param {boolean} emulateMobile
  * @param {string} proxyHost
- * @param {boolean} antiBotDetection
- * @param {string} executablePath
- * @param {number} maxLoadTimeMs
- * @param {number} extraExecutionTimeMs
+ * @param {string} outputPath
+ * @param {string} emailAddress
+ * @param {string} passwordValue
  */
-async function crawlAndSaveData(urlString, dataCollectors, log, filterOutFirstParty, dataCallback, emulateMobile, proxyHost, antiBotDetection, executablePath, maxLoadTimeMs, extraExecutionTimeMs) {
+async function crawlAndSaveData(urlString, dataCollectors, log, filterOutFirstParty, dataCallback, emulateMobile, proxyHost, outputPath, emailAddress, passwordValue) {
     const url = new URL(urlString);
     /**
-     * @type {function(...any):void} 
+     * @type {function(...any):void}
      */
-    const prefixedLog = (...msg) => log(chalk.gray(`${url.hostname}:`), ...msg);
+    const prefixedLog = (...msg) => log(chalk.gray(`${new Date().toISOString()} ${url.hostname}:`), ...msg);
 
     const data = await crawl(url, {
         log: prefixedLog,
@@ -41,19 +41,18 @@ async function crawlAndSaveData(urlString, dataCollectors, log, filterOutFirstPa
         filterOutFirstParty,
         emulateMobile,
         proxyHost,
-        runInEveryFrame: antiBotDetection ? notABot : undefined,
-        executablePath,
-        maxLoadTimeMs,
-        extraExecutionTimeMs
+        outputPath,
+        emailAddress,
+        passwordValue
     });
 
     dataCallback(url, data);
 }
 
 /**
- * @param {{urls: Array<string|{url:string,dataCollectors?:BaseCollector[]}>, dataCallback: function(URL, import('./crawler').CollectResult): void, dataCollectors?: BaseCollector[], failureCallback?: function(string, Error): void, numberOfCrawlers?: number, logFunction?: function, filterOutFirstParty: boolean, emulateMobile: boolean, proxyHost: string, antiBotDetection?: boolean, chromiumVersion?: string, maxLoadTimeMs?: number, extraExecutionTimeMs?: number}} options
+ * @param {{urls: string[], dataCallback: function(URL, import('./crawler').CollectResult): void, dataCollectors?: BaseCollector[], failureCallback?: function(string, Error): void, numberOfCrawlers?: number, logFunction?: function, filterOutFirstParty: boolean, emulateMobile: boolean, proxyHost: string, outputPath:string, emailAddress: string, passwordValue: string}} options
  */
-module.exports = async options => {
+module.exports = options => {
     const deferred = createDeferred();
     const log = options.logFunction || (() => {});
     const failureCallback = options.failureCallback || (() => {});
@@ -67,27 +66,11 @@ module.exports = async options => {
     }
     log(chalk.cyan(`Number of crawlers: ${numberOfCrawlers}\n`));
 
-    /**
-     * @type {string}
-     */
-    let executablePath;
-    if (options.chromiumVersion) {
-        executablePath = await downloadCustomChromium(log, options.chromiumVersion);
-    }
-
-    async.eachOfLimit(options.urls, numberOfCrawlers, (urlItem, idx, callback) => {
-        const urlString = (typeof urlItem === 'string') ? urlItem : urlItem.url;
-        let dataCollectors = options.dataCollectors;
-
-        // there can be a different set of collectors for every item
-        if ((typeof urlItem !== 'string') && urlItem.dataCollectors) {
-            dataCollectors = urlItem.dataCollectors;
-        }
-
+    async.eachOfLimit(options.urls, numberOfCrawlers, (urlString, idx, callback) => {
         log(chalk.cyan(`Processing entry #${Number(idx) + 1} (${urlString}).`));
         const timer = createTimer();
 
-        const task = crawlAndSaveData.bind(null, urlString, dataCollectors, log, options.filterOutFirstParty, options.dataCallback, options.emulateMobile, options.proxyHost, (options.antiBotDetection !== false), executablePath, options.maxLoadTimeMs, options.extraExecutionTimeMs);
+        const task = crawlAndSaveData.bind(null, urlString, options.dataCollectors, log, options.filterOutFirstParty, options.dataCallback, options.emulateMobile, options.proxyHost, options.outputPath, options.emailAddress, options.passwordValue);
 
         async.retry(MAX_NUMBER_OF_RETRIES, task, err => {
             if (err) {
@@ -107,5 +90,5 @@ module.exports = async options => {
         }
     });
 
-    await deferred.promise;
+    return deferred.promise;
 };

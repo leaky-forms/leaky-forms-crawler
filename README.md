@@ -1,19 +1,21 @@
-# DuckDuckGo Tracker Radar Collector
-🕸 Modular, multithreaded, [puppeteer](https://github.com/GoogleChrome/puppeteer)-based crawler used to generate third party request data for the [Tracker Radar](https://github.com/duckduckgo/tracker-radar).
+## Crawler
+In order to detect email and password exfiltration, we extended **[Tracker Radar Collector(TRC)](https://github.com/duckduckgo/tracker-radar-collector)** by adding EmailPasswordFieldsCollector that finds and fills email and password fields.
 
-## How do I use it?
+In order to investigate the effect of users’ consent preferences, we integrated **[Consent-O-Matic](https://github.com/cavi-au/Consent-O-Matic)** into our crawler.
 
-### Use it from the command line
+Lastly, we used the Fathom-based email field detector model used in **[Firefox Relay](https://github.com/mozilla/fx-private-relay/blob/v1.2.2/extension/js/email_detector.js)**  add-on.
 
-1. Clone this project locally (`git clone git@github.com:duckduckgo/tracker-radar-collector.git`)
-2. Install all dependencies (`npm i`)
-3. Run the command line tool:
+### Installation
+- Clone this project locally (`git clone git@github.com:asumansenol/leaky-forms.git`)
+- Install all dependencies (`npm i`)
+- Run the command line tool:
 
 ```sh
-npm run crawl -- -u "https://example.com" -o ./data/ -v
+npm run crawl -- -u "https://example.com" -o ./data/ -v -d "emailPasswordFields,requests,cookies,targets,apis," -e "test_email_address@gmail.com" -w "myPassword111111"
 ```
 
-Available options:
+### Command line parameters
+Below we give a description of the parameters that are passed to the crawler.
 
 - `-o, --output <path>` - (required) output folder where output files will be created
 - `-u, --url <url>` - single URL to crawl
@@ -31,100 +33,11 @@ Available options:
 - `-a, --disable-anti-bot` - disable simple build-in anti bot detection script injected to every frame
 - `--chromium-version <version_number>` - use custom version of Chromium (e.g. "843427") instead of using the default
 - `--config <path>` - path to a config file that allows to set all the above settings (and more). Note that CLI flags have a higher priority than settings passed via config. You can find a sample config file in `tests/cli/sampleConfig.json`.
+- `-e, --email-address` - email address that will be filled
+- `-w, --password` - password that will be filled
 
-### Use it as a module
+### Crawl setup
+To crawl 100K websites, we needed to split URLs into the lists containing 1K webistes in crux_urls filder due to the an issue on the TRC. That's why if you need to run crawl for more than 100K websites you can use the shell scripts crawl_in_parts.sh for the desktop and crawl_in_parts_mobile.sh for the mobile. These shell scripts waits for 6 arguments that you need to pass like the output folder name, email address that will be filled by the crawler etc.
 
-1. Install this project as a dependency (`npm i git+https://github.com:duckduckgo/tracker-radar-collector.git`).
-
-2. Import it:
-
-```js
-// you can either import a "crawlerConductor" that runs multiple crawlers for you
-const {crawlerConductor} = require('tracker-radar-collector');
-// or a single crawler
-const {crawler} = require('tracker-radar-collector');
-
-// you will also need some data collectors (/collectors/ folder contains all build-in collectors)
-const {RequestCollector, CookieCollector, …} = require('tracker-radar-collector');
-```
-
-3. Use it:
-
-```js
-crawlerConductor({
-    // required ↓
-    urls: ['https://example.com', {url: 'https://duck.com', dataCollectors: [new ScreenshotCollector()]}, …], // two formats available: first format will use default collectors set below, second format will use custom set of collectors for this one url
-    dataCallback: (url, result) => {…},
-    // optional ↓
-    dataCollectors: [new RequestCollector(), new CookieCollector()],
-    failureCallback: (url, error) => {…},
-    numberOfCrawlers: 12,// custom number of crawlers (there is a hard limit of 38 though)
-    logFunction: (...msg) => {…},// custom logging function
-    filterOutFirstParty: true,// don't save any first-party data (false by default)
-    emulateMobile: true,// emulate a mobile device (false by default)
-    proxyHost: 'socks5://myproxy:8080',// SOCKS proxy host (none by default)
-    antiBotDetection: true,// if anti bot detection script should be injected (true by default)
-    chromiumVersion: '843427',// Chromium version that should be downloaded and used instead of the default one
-    maxLoadTimeMs: 30000,// how long should crawlers wait for the page to load, defaults to 30s
-    extraExecutionTimeMs: 2500,// how long should crawlers wait after page loads before collecting data, defaults to 2.5s
-});
-```
-
-**OR** (if you prefer to run a single crawler)
-
-```js
-// crawler will throw an exception if crawl fails
-const data = await crawler(new URL('https://example.com'), {
-    // optional ↓
-    collectors: [new RequestCollector(), new CookieCollector(), …],
-    log: (...msg) => {…},
-    urlFilter: (url) => {…},// function that, for each request URL, decides if its data should be stored or not
-    emulateMobile: false,
-    emulateUserAgent: false,// don't use the default puppeteer UA (default true)
-    proxyHost: 'socks5://myproxy:8080',
-    browserContext: context,// if you prefer to create the browser context yourself (to e.g. use other browser or non-incognito context) you can pass it here (by default crawler will create an incognito context using standard chromium for you)
-    runInEveryFrame: () => {window.alert('injected')},// function that should be executed in every frame (main + all subframes)
-    executablePath: '/some/path/Chromium.app/Contents/MacOS/Chromium',// path to a custom Chromium installation that should be used instead of the default one
-    maxLoadTimeMs: 30000,// how long should the crawler wait for the page to load, defaults to 30s
-    extraExecutionTimeMs: 2500,// how long should crawler wait after page loads before collecting data, defaults to 2.5s
-});
-```
-
-ℹ️ Hint: check out `crawl-cli.js` and `crawlerConductor.js` to see how `crawlerConductor` and `crawler` are used in the wild.
-
-## Output format
-
-Each successfully crawled website will create a separate file named after the website (when using the CLI tool). Output data format is specified in `crawler.js` (see `CollectResult` type definition).
-Additionally, for each crawl `metadata.json` file will be created containing crawl configuration, system configuration and some high-level stats. 
-
-## Data post-processing
-
-Example post-processing script, that can be used as a template, can be found in `post-processing/summary.js`. Execute it from the command line like this:
-
-```sh
-node ./post-processing/summary.js -i ./collected-data/ -o ./result.json
-```
-
-ℹ️ Hint: When dealing with huge amounts of data you may need to increase nodejs's memory limit e.g. `node --max_old_space_size=4096`.
-
-## Creating new collectors
-
-Each collector needs to extend the `BaseCollector` and has to override following methods:
-
-- `id()` which returns name of the collector (e.g. 'cookies')
-- `getData(options)` which should return collected data. `options` have following properties:
-    - `finalUrl` - final URL of the main document (after all redirects) that you may want to use,
-    - `filterFunction` which, if provided, takes an URL and returns a boolean telling you if given piece of data should be returned or filtered out based on its origin.
-
-Additionally, each collector can override following methods:
-
-- `init(options)` which is called before the crawl begins
-- `addTarget(targetInfo)` which is called whenever new target is created (main page, iframe, web worker etc.)
-
-There are couple of built-in collectors in the `collectors/` folder. `CookieCollector` is the simplest one and can be used as a template.
-
-Each new collector has to be added in two places to be discoverable:
-- `crawlerConductor.js` - so that `crawlerConductor` knows about it (and it can be used in the CLI tool)
-- `main.js` - so that the new collector can be imported by other projects
-
-You can also add types to define the structure of the data exported by your collector. These should be added to the `CollectorData` type in `collectorsList.js`. This will add type hints to all places where the data is used in the code.
+### After the crawl
+Crawler will store the data about the crawls in the directory that you passed the crawler. Crawler outputs are JSONs, log, PNGs and HTMLs. The HTML and PNGs can be used for the debugging but the JSONs and the log file will be used for the leak detection.
