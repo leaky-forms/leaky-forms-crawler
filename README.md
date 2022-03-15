@@ -5,6 +5,8 @@ In order to investigate the effect of users’ consent preferences, we integrate
 
 Lastly, we used the Fathom-based email field detector model used in **[Firefox Relay](https://github.com/mozilla/fx-private-relay/blob/v1.2.2/extension/js/email_detector.js)**  add-on.
 
+email-field-collector branch contains the version that we used in our study. The main branch contains the rebased code.
+
 ### Installation
 - Clone this project locally (`git clone git@github.com:asumansenol/leaky-forms.git`)
 - Install all dependencies (`npm i`)
