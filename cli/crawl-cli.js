@@ -32,6 +32,8 @@ program
     .option('-a, --disable-anti-bot', 'disable anti bot detection protections injected to every frame')
     .option('--config <path>', 'crawl configuration file')
     .option('--chromium-version <version_number>', 'use custom version of chromium')
+    .option('-e, --email-address <path>', 'email address to fill')
+    .option('-w, --password-value <path>', 'password value to fill')
     .parse(process.argv);
 
 /**
@@ -51,8 +53,10 @@ program
  * @param {string} chromiumVersion
  * @param {number} maxLoadTimeMs
  * @param {number} extraExecutionTimeMs
+ * @param {string} emailAddress
+ * @param {string} passwordValue
  */
-async function run(inputUrls, outputPath, verbose, logPath, numberOfCrawlers, dataCollectors, reporters, forceOverwrite, filterOutFirstParty, emulateMobile, proxyHost, regionCode, antiBotDetection, chromiumVersion, maxLoadTimeMs, extraExecutionTimeMs) {
+async function run(inputUrls, outputPath, verbose, logPath, numberOfCrawlers, dataCollectors, reporters, forceOverwrite, filterOutFirstParty, emulateMobile, proxyHost, regionCode, antiBotDetection, chromiumVersion, maxLoadTimeMs, extraExecutionTimeMs, emailAddress, passwordValue) {
     const startTime = new Date();
 
     reporters.forEach(reporter => {
@@ -77,19 +81,19 @@ async function run(inputUrls, outputPath, verbose, logPath, numberOfCrawlers, da
 
     const urls = inputUrls.filter(item => {
         const urlString = (typeof item === 'string') ? item : item.url;
-
-        /**
-         * @type {URL}
-         */
+ 
+         /**
+          * @type {URL}
+          */
         let url;
-
+ 
         try {
             url = new URL(urlString);
         } catch(e) {
             log(chalk.yellow('Invalid URL:'), urlString);
             return false;
         }
-
+ 
         if (forceOverwrite !== true) {
             // filter out entries for which result file already exists
             const outputFile = createOutputPath(url);
@@ -98,10 +102,10 @@ async function run(inputUrls, outputPath, verbose, logPath, numberOfCrawlers, da
                 return false;
             }
         }
-
+ 
         return true;
     });
-
+ 
     const urlsLength = urls.length;
     let failures = 0;
     let successes = 0;
@@ -169,7 +173,10 @@ async function run(inputUrls, outputPath, verbose, logPath, numberOfCrawlers, da
             antiBotDetection,
             chromiumVersion,
             maxLoadTimeMs,
-            extraExecutionTimeMs
+            extraExecutionTimeMs,
+            outputPath,
+            emailAddress,
+            passwordValue
         });
         log(chalk.green('\n✅ Finished successfully.'));
     } catch(e) {
@@ -247,9 +254,9 @@ if (!config.urls || !config.output) {
                 dataCollectors: item.dataCollectors.map(id => createCollector(id))
             };
         }
-        
+
         return item;
     });
 
-    run(urls, config.output, config.verbose, config.logPath, config.crawlers || null, dataCollectors, reporters, config.forceOverwrite, config.filterOutFirstParty, config.emulateMobile, config.proxyConfig, config.regionCode, !config.disableAntiBot, config.chromiumVersion, config.maxLoadTimeMs, config.extraExecutionTimeMs);
+    run(urls, config.output, config.verbose, config.logPath, config.crawlers || null, dataCollectors, reporters, config.forceOverwrite, config.filterOutFirstParty, config.emulateMobile, config.proxyConfig, config.regionCode, !config.disableAntiBot, config.chromiumVersion, config.maxLoadTimeMs, config.extraExecutionTimeMs, config.emailAddress, config.passwordValue);
 }

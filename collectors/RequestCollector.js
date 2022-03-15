@@ -42,11 +42,12 @@ class RequestCollector extends BaseCollector {
          * @type {Map<string, InternalRequestData>}
          */
         this._unmatched = new Map();
+        this._headersFromRequestWillBeSentExtraInfo = new Map();
         this._log = log;
     }
 
     /**
-     * @param {{cdpClient: import('puppeteer').CDPSession, url: string, type: import('./TargetCollector').TargetType}} targetInfo 
+     * @param {{cdpClient: import('puppeteer').CDPSession, url: string, type: import('puppeteer').TargetType}} targetInfo 
      */
     async addTarget({cdpClient}) {
         await cdpClient.send('Runtime.enable');
@@ -56,7 +57,9 @@ class RequestCollector extends BaseCollector {
 
         await Promise.all([
             cdpClient.on('Network.requestWillBeSent', r => this.handleRequest(r, cdpClient)),
+            cdpClient.on('Network.requestWillBeSentExtraInfo', r => this.handleRequestWillBeSentExtraInfo(r)),
             cdpClient.on('Network.webSocketCreated', r => this.handleWebSocket(r)),
+            cdpClient.on('Network.webSocketFrameSent', r => this.handleWebSocketFrameSent(r)),
             cdpClient.on('Network.responseReceived', r => this.handleResponse(r)),
             cdpClient.on('Network.responseReceivedExtraInfo', r => this.handleResponseExtraInfo(r)),
             cdpClient.on('Network.loadingFailed', r => this.handleFailedRequest(r, cdpClient)),
@@ -89,7 +92,7 @@ class RequestCollector extends BaseCollector {
             let {body, base64Encoded} = await cdp.send('Network.getResponseBody', {requestId: id});
 
             if (base64Encoded) {
-                body = Buffer.from(body, 'base64').toString('utf-8');
+                body = Buffer.from(body, 'base64');
             }
 
             return crypto.createHash('sha256').update(body).digest('hex');
@@ -99,7 +102,7 @@ class RequestCollector extends BaseCollector {
     }
 
     /**
-     * @param {{initiator: import('../helpers/initiators').RequestInitiator, request: CDPRequest, requestId: RequestId, timestamp: Timestamp, frameId?: FrameId, type?: ResourceType, redirectResponse?: CDPResponse}} data 
+     * @param {{initiator: import('../helpers/initiators').RequestInitiator, request: CDPRequest, requestId: RequestId, timestamp: Timestamp, frameId?: FrameId, type?: ResourceType, redirectResponse?: CDPResponse, wallTime: Timestamp}} data
      * @param {import('puppeteer').CDPSession} cdp
      */
     handleRequest(data, cdp) {
@@ -108,12 +111,14 @@ class RequestCollector extends BaseCollector {
             type,
             request,
             redirectResponse,
-            timestamp: startTime
+            timestamp: startTime,
+            wallTime
         } = data;
 
         let initiator = data.initiator;
         const url = request.url;
         const method = request.method;
+        let postData = method === "POST" ? request.postData : "";
 
         // for CORS requests initiator is set incorrectly to 'parser', thankfully we can get proper initiator
         // from the corresponding OPTIONS request
@@ -131,7 +136,7 @@ class RequestCollector extends BaseCollector {
         /**
          * @type {InternalRequestData}
          */
-        const requestData = {id, url, method, type, initiator, startTime};
+        const requestData = {id, url, method, type, initiator, startTime, wallTime, postData};
 
         // if request A gets redirected to B which gets redirected to C chrome will produce 4 events:
         // requestWillBeSent(A) requestWillBeSent(B) requestWillBeSent(C) responseReceived()
@@ -176,6 +181,8 @@ class RequestCollector extends BaseCollector {
                 }
             });
         }
+        const extraInfoHeaders = this._headersFromRequestWillBeSentExtraInfo.get(id);
+        requestData.requestHeaders = normalizeHeaders(extraInfoHeaders ? extraInfoHeaders : request.headers);
 
         this._requests.push(requestData);
     }
@@ -189,6 +196,22 @@ class RequestCollector extends BaseCollector {
             url: request.url,
             type: 'WebSocket',
             initiator: request.initiator
+        });
+    }
+
+    /**
+     * @param {{requestId: RequestId, timestamp: number, response: {opcode: number,  mask: boolean, payloadData: string}}} request
+     */
+    handleWebSocketFrameSent(request) {
+        const previousRequest = this.findLastRequestWithId(request.requestId);
+
+        this._requests.push({
+            id: request.requestId,
+            startTime: request.timestamp,
+            url: previousRequest ? previousRequest.url : "",
+            type: 'WebSocket',
+            wallTime: new Date().getTime(),
+            postData: request.response.payloadData
         });
     }
 
@@ -222,6 +245,27 @@ class RequestCollector extends BaseCollector {
         if (!request.responseHeaders) {
             request.responseHeaders = normalizeHeaders(response.headers);
         }
+    }
+
+    /**
+    * Network.requestWillBeSentExtraInfo
+    * @param {{requestId: RequestId, associatedCookies: object, headers: Object<string, string>}} data
+    */
+    handleRequestWillBeSentExtraInfo(data) {
+        const {
+            requestId: id,
+            headers
+        } = data;
+        // check if there's a matching request
+        const request = this.findLastRequestWithId(id);
+        if (!request) {
+            // store the headers if no request is found
+            this._headersFromRequestWillBeSentExtraInfo.set(id, headers);
+            return;
+        }
+        // set the headers directly if a matching request is found
+        // handleRequestWillBeSentExtraInfo provides most details
+        request.requestHeaders = normalizeHeaders(headers);
     }
 
     /**
@@ -333,13 +377,16 @@ class RequestCollector extends BaseCollector {
                 status: request.status,
                 size: request.size,
                 remoteIPAddress: request.remoteIPAddress,
+                requestHeaders: request.requestHeaders,
                 responseHeaders: request.responseHeaders && filterHeaders(request.responseHeaders, this._saveHeaders),
                 responseBodyHash: request.responseBodyHash,
                 failureReason: request.failureReason,
                 redirectedTo: request.redirectedTo,
                 redirectedFrom: request.redirectedFrom,
                 initiators: Array.from(getAllInitiators(request.initiator)),
-                time: (request.startTime && request.endTime) ? (request.endTime - request.startTime) : undefined
+                time: (request.startTime && request.endTime) ? (request.endTime - request.startTime) : undefined,
+                wallTime: request.wallTime,
+                postData: request.postData
             }));
     }
 }
@@ -356,8 +403,10 @@ module.exports = RequestCollector;
  * @property {string=} redirectedTo
  * @property {number=} status
  * @property {string} remoteIPAddress
+ * @property {object} requestHeaders
  * @property {object} responseHeaders
  * @property {string=} responseBodyHash
+ * @property {string=} postData
  * @property {string} failureReason
  * @property {number=} size in bytes
  * @property {number=} time in seconds
@@ -374,12 +423,15 @@ module.exports = RequestCollector;
  * @property {string=} redirectedTo
  * @property {number=} status
  * @property {string=} remoteIPAddress
+ * @property {Object<string,string>=} requestHeaders
  * @property {Object<string,string>=} responseHeaders
  * @property {string=} failureReason
  * @property {number=} size
  * @property {Timestamp=} startTime
  * @property {Timestamp=} endTime
+ * @property {Timestamp=} wallTime
  * @property {string=} responseBodyHash
+ * @property {string=} postData
  */
 
 /**
@@ -404,6 +456,7 @@ module.exports = RequestCollector;
  * @property {HttpMethod} method
  * @property {object} headers
  * @property {'VeryLow'|'Low'|'Medium'|'High'|'VeryHigh'} initialPriority
+ * @property {string} postData
  */
 
 /**

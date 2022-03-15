@@ -15,6 +15,8 @@ function getInitiatorsFromStack(stack) {
     stack.callFrames.forEach(frame => {
         if (frame.url) {
             currentInitiators.push(frame.url);
+        } else if(frame.fileName) {
+            currentInitiators.push(frame.fileName);
         }
     });
 
@@ -26,7 +28,7 @@ function getInitiatorsFromStack(stack) {
 }
 
 /**
- * @param {RequestInitiator} initiator
+ * @param {RequestInitiator} initiator=
  * @returns {Set<string>}
  */
 function getAllInitiators(initiator) {
@@ -65,6 +67,7 @@ module.exports = {
  * @property {string} functionName
  * @property {string} scriptId
  * @property {string} url
+ * @property {string} fileName
  * @property {number} lineNumber
  * @property {number} columnNumber
  */

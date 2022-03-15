@@ -12,7 +12,7 @@ const BaseCollector = require('./collectors/BaseCollector');
 const notABot = require('./helpers/notABot');
 
 const MAX_NUMBER_OF_CRAWLERS = 38;// by trial and error there seems to be network bandwidth issues with more than 38 browsers. 
-const MAX_NUMBER_OF_RETRIES = 2;
+const MAX_NUMBER_OF_RETRIES = 1;
 
 /**
  * @param {string} urlString 
@@ -26,8 +26,11 @@ const MAX_NUMBER_OF_RETRIES = 2;
  * @param {string} executablePath
  * @param {number} maxLoadTimeMs
  * @param {number} extraExecutionTimeMs
+ * @param {string} outputPath
+ * @param {string} emailAddress
+ * @param {string} passwordValue
  */
-async function crawlAndSaveData(urlString, dataCollectors, log, filterOutFirstParty, dataCallback, emulateMobile, proxyHost, antiBotDetection, executablePath, maxLoadTimeMs, extraExecutionTimeMs) {
+async function crawlAndSaveData(urlString, dataCollectors, log, filterOutFirstParty, dataCallback, emulateMobile, proxyHost, antiBotDetection, executablePath, maxLoadTimeMs, extraExecutionTimeMs, outputPath, emailAddress, passwordValue) {
     const url = new URL(urlString);
     /**
      * @type {function(...any):void} 
@@ -44,14 +47,17 @@ async function crawlAndSaveData(urlString, dataCollectors, log, filterOutFirstPa
         runInEveryFrame: antiBotDetection ? notABot : undefined,
         executablePath,
         maxLoadTimeMs,
-        extraExecutionTimeMs
+        extraExecutionTimeMs,
+        outputPath,
+        emailAddress,
+        passwordValue
     });
 
     dataCallback(url, data);
 }
 
 /**
- * @param {{urls: Array<string|{url:string,dataCollectors?:BaseCollector[]}>, dataCallback: function(URL, import('./crawler').CollectResult): void, dataCollectors?: BaseCollector[], failureCallback?: function(string, Error): void, numberOfCrawlers?: number, logFunction?: function, filterOutFirstParty: boolean, emulateMobile: boolean, proxyHost: string, antiBotDetection?: boolean, chromiumVersion?: string, maxLoadTimeMs?: number, extraExecutionTimeMs?: number}} options
+ * @param {{urls: Array<string|{url:string,dataCollectors?:BaseCollector[]}>, dataCallback: function(URL, import('./crawler').CollectResult): void, dataCollectors?: BaseCollector[], failureCallback?: function(string, Error): void, numberOfCrawlers?: number, logFunction?: function, filterOutFirstParty: boolean, emulateMobile: boolean, proxyHost: string, antiBotDetection?: boolean, chromiumVersion?: string, maxLoadTimeMs?: number, extraExecutionTimeMs?: number, outputPath:string, emailAddress: string, passwordValue: string}} options
  */
 module.exports = async options => {
     const deferred = createDeferred();
@@ -87,7 +93,7 @@ module.exports = async options => {
         log(chalk.cyan(`Processing entry #${Number(idx) + 1} (${urlString}).`));
         const timer = createTimer();
 
-        const task = crawlAndSaveData.bind(null, urlString, dataCollectors, log, options.filterOutFirstParty, options.dataCallback, options.emulateMobile, options.proxyHost, (options.antiBotDetection !== false), executablePath, options.maxLoadTimeMs, options.extraExecutionTimeMs);
+        const task = crawlAndSaveData.bind(null, urlString, dataCollectors, log, options.filterOutFirstParty, options.dataCallback, options.emulateMobile, options.proxyHost, (options.antiBotDetection !== false), executablePath, options.maxLoadTimeMs, options.extraExecutionTimeMs, options.outputPath, options.emailAddress, options.passwordValue);
 
         async.retry(MAX_NUMBER_OF_RETRIES, task, err => {
             if (err) {

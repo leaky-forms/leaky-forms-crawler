@@ -1,5 +1,22 @@
 /* eslint-disable max-lines */
-const puppeteer = require('puppeteer');
+let puppeteer = require('puppeteer');
+const fs = require('fs');
+const TAKE_HOMEPAGE_SCREENSHOT = true;
+const SAVE_HOMEPAGE_HTML = true;
+const USE_STEALTH = false;
+if (USE_STEALTH) {
+    puppeteer = require('puppeteer-extra');
+    const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+    // @ts-ignore
+    puppeteer.use(StealthPlugin());
+} else {
+    puppeteer = require('puppeteer');
+}
+const path = require('path');
+const pageUtils = require('./helpers/utils');
+const cmpDetectorSource = fs.readFileSync('./helpers/cmpDetect.js', 'utf8');
+const ENABLE_CMP_EXTENSION = true;
+const CMP_ACTION = 'NO_ACTION';  //Values can be 'NO_ACTION', 'ACCEPT_ALL', 'REJECT_ALL'
 const chalk = require('chalk').default;
 const {createTimer} = require('./helpers/timer');
 const wait = require('./helpers/wait');
@@ -65,7 +82,7 @@ function openBrowser(log, proxyHost, executablePath) {
 /**
  * @param {puppeteer.BrowserContext} context
  * @param {URL} url
- * @param {{collectors: import('./collectors/BaseCollector')[], log: function(...any):void, urlFilter: function(string, string):boolean, emulateMobile: boolean, emulateUserAgent: boolean, runInEveryFrame: function():void, maxLoadTimeMs: number, extraExecutionTimeMs: number}} data
+ * @param {{collectors: import('./collectors/BaseCollector')[], log: function(...any):void, urlFilter: function(string, string):boolean, emulateMobile: boolean, emulateUserAgent: boolean, runInEveryFrame: function():void, maxLoadTimeMs: number, extraExecutionTimeMs: number, outputPath: string, emailAddress: string, passwordValue: string}} data
  *
  * @returns {Promise<CollectResult>}
  */
@@ -77,7 +94,10 @@ async function getSiteData(context, url, {
     emulateMobile,
     runInEveryFrame,
     maxLoadTimeMs,
-    extraExecutionTimeMs
+    extraExecutionTimeMs,
+    outputPath,
+    emailAddress,
+    passwordValue
 }) {
     const testStarted = Date.now();
 
@@ -105,18 +125,19 @@ async function getSiteData(context, url, {
     }
 
     let pageTargetCreated = false;
+    let pageLoaded = false;
 
     // initiate collectors for all contexts (main page, web worker, service worker etc.)
     context.on('targetcreated', async target => {
         // we have already initiated collectors for the main page, so we ignore the first page target
-        if (target.type() === 'page' && !pageTargetCreated) {
+        if (target.type() === 'page' && !pageTargetCreated && !pageLoaded) {
             pageTargetCreated = true;
             return;
         }
 
         const timer = createTimer();
         let cdpClient = null;
-        
+
         try {
             cdpClient = await target.createCDPSession();
         } catch (e) {
@@ -124,7 +145,7 @@ async function getSiteData(context, url, {
             return;
         }
 
-        const simpleTarget = {url: target.url(), type: target.type(), cdpClient};
+        const simpleTarget = {url: target.url(), type: target.type(), cdpClient, pageLoaded};
         targets.push(simpleTarget);
 
         try {
@@ -175,7 +196,7 @@ async function getSiteData(context, url, {
     for (let collector of collectors) {
         try {
             // eslint-disable-next-line no-await-in-loop
-            await collector.addTarget({url: url.toString(), type: 'page', cdpClient});
+            await collector.addTarget({url: url.toString(), type: 'page', cdpClient, page, pageLoaded});
         } catch (e) {
             log(chalk.yellow(`${collector.id()} failed to attach to page`), chalk.gray(e.message), chalk.gray(e.stack));
         }
@@ -188,6 +209,9 @@ async function getSiteData(context, url, {
 
     page.setViewport(emulateMobile ? MOBILE_VIEWPORT : DEFAULT_VIEWPORT);
 
+    if(ENABLE_CMP_EXTENSION) {
+        await page.evaluateOnNewDocument(cmpDetectorSource);
+    }
     // if any prompts open on page load, they'll make the page hang unless closed
     page.on('dialog', dialog => dialog.dismiss());
 
@@ -195,9 +219,10 @@ async function getSiteData(context, url, {
     page.on('error', e => log(chalk.red(e.message)));
 
     let timeout = false;
-
+    const loadPageTimer = createTimer();
     try {
         await page.goto(url.toString(), {timeout: maxLoadTimeMs, waitUntil: 'networkidle0'});
+        pageLoaded = true;
     } catch (e) {
         if (e instanceof puppeteer.errors.TimeoutError || (e.name && e.name === 'TimeoutError')) {
             log(chalk.yellow('Navigation timeout exceeded.'));
@@ -216,8 +241,26 @@ async function getSiteData(context, url, {
 
     // give website a bit more time for things to settle
     await page.waitForTimeout(extraExecutionTimeMs);
-
     const finalUrl = page.url();
+    const urlStr = url.toString();
+    const homepageLoadTime = parseFloat(loadPageTimer.getElapsedTime());
+    log(`Loaded ${urlStr} in ${loadPageTimer.getElapsedTime()}s (finalUrl: ${finalUrl})`);
+    if(TAKE_HOMEPAGE_SCREENSHOT) {
+        const filePathForSs = path.join(outputPath, `${url.hostname}_after_page_load`);
+        await page.screenshot({path: filePathForSs + '.png'});
+    }
+    if(SAVE_HOMEPAGE_HTML) {
+        const filePathForHTML = path.join(outputPath, `${url.hostname}_after_page_load`);
+        let bodyHTML = await page.evaluate(() => document.body.innerHTML);
+        fs.writeFileSync(filePathForHTML + '.html', bodyHTML);
+    }
+    if(ENABLE_CMP_EXTENSION) {
+        try {
+            await pageUtils.findCMP(page, log, CMP_ACTION);
+        } catch (error) {
+            log('Error while detecting CMP', error.message);
+        }
+    }
     /**
      * @type {Object<string, Object>}
      */
@@ -229,7 +272,14 @@ async function getSiteData(context, url, {
             // eslint-disable-next-line no-await-in-loop
             const collectorData = await collector.getData({
                 finalUrl,
-                urlFilter: urlFilter && urlFilter.bind(null, finalUrl)
+                urlFilter: urlFilter && urlFilter.bind(null, finalUrl),
+                page,
+                outputPath,
+                context,
+                homepageLoadTime,
+                emulateMobile,
+                emailAddress,
+                passwordValue
             });
             data[collector.id()] = collectorData;
             log(`getting ${collector.id()} data took ${getDataTimer.getElapsedTime()}s`);
@@ -275,7 +325,7 @@ function isThirdPartyRequest(documentUrl, requestUrl) {
 
 /**
  * @param {URL} url
- * @param {{collectors?: import('./collectors/BaseCollector')[], log?: function(...any):void, filterOutFirstParty?: boolean, emulateMobile?: boolean, emulateUserAgent?: boolean, proxyHost?: string, browserContext?: puppeteer.BrowserContext, runInEveryFrame?: function():void, executablePath?: string, maxLoadTimeMs?: number, extraExecutionTimeMs?: number}} options
+ * @param {{collectors?: import('./collectors/BaseCollector')[], log?: function(...any):void, filterOutFirstParty?: boolean, emulateMobile?: boolean, emulateUserAgent?: boolean, proxyHost?: string, browserContext?: puppeteer.BrowserContext, runInEveryFrame?: function():void, executablePath?: string, maxLoadTimeMs?: number, extraExecutionTimeMs?: number, outputPath: string, emailAddress?: string, passwordValue: string}} options
  * @returns {Promise<CollectResult>}
  */
 module.exports = async (url, options) => {
@@ -286,7 +336,7 @@ module.exports = async (url, options) => {
 
     let data = null;
 
-    const maxLoadTimeMs = options.maxLoadTimeMs || 30000;
+    const maxLoadTimeMs = options.maxLoadTimeMs || 120000;
     const extraExecutionTimeMs = options.extraExecutionTimeMs || 2500;
     const maxTotalTimeMs = maxLoadTimeMs * 2;
 
@@ -299,7 +349,10 @@ module.exports = async (url, options) => {
             emulateMobile: options.emulateMobile,
             runInEveryFrame: options.runInEveryFrame,
             maxLoadTimeMs,
-            extraExecutionTimeMs
+            extraExecutionTimeMs,
+            outputPath: options.outputPath,
+            emailAddress: options.emailAddress,
+            passwordValue: options.passwordValue
         }), maxTotalTimeMs);
     } catch(e) {
         log(chalk.red('Crawl failed'), e.message, chalk.gray(e.stack));

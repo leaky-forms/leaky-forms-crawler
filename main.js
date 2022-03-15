@@ -3,6 +3,7 @@ const crawler = require('./crawler');
 
 const RequestCollector = require('./collectors/RequestCollector');
 const APICallCollector = require('./collectors/APICallCollector');
+const EmailPasswordFieldsCollector = require('./collectors/EmailPasswordFieldsCollector');
 const CookieCollector = require('./collectors/CookieCollector');
 const TargetCollector = require('./collectors/TargetCollector');
 const TraceCollector = require('./collectors/TraceCollector');
@@ -15,6 +16,7 @@ module.exports = {
     crawlerConductor,
     // collectors ↓
     RequestCollector,
+    EmailPasswordFieldsCollector,
     APICallCollector,
     CookieCollector,
     TargetCollector,

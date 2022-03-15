@@ -3,6 +3,7 @@
  * @type {{global?: string, proto?: string, props: PropertyBreakpoint[], methods: MethodBreakpoint[]}[]}
  */
 const breakpoints = [
+    /*
     {
         global: 'window',
         props: [
@@ -85,6 +86,7 @@ const breakpoints = [
         ],
         methods: []
     },
+    */
     {
         proto: 'Document',
         props: [
@@ -189,7 +191,13 @@ const breakpoints = [
             // used to detect fonts
             {
                 name: 'measureText',
-                test: 'var c = document.createElement("canvas"); var ctx = c.getContext("2d"); ctx.measureText("txt");'
+                test: 'var c = document.createElement("canvas"); var ctx = c.getContext("2d"); ctx.measureText("txt");',
+                saveArguments: true
+            },
+            {
+                name: 'fillText',
+                test: 'var c = document.createElement("canvas"); var ctx = c.getContext("2d"); ctx.fillText("txt");',
+                saveArguments: true
             },
             {
                 name: 'getImageData',
@@ -202,6 +210,7 @@ const breakpoints = [
             }
         ]
     },
+    /*
     {
         proto: 'HTMLMediaElement',
         props: [],
@@ -222,6 +231,7 @@ const breakpoints = [
             {name: 'getTimezoneOffset'}
         ]
     },
+    */
     {
         proto: 'WebGLRenderingContext',
         props: [
@@ -323,6 +333,7 @@ const breakpoints = [
         ],
         methods: []
     },
+    /*
     {
         proto: 'SharedWorker', // can be used to talk between tabs - not sure how unsafe that is
         props: [],
@@ -427,6 +438,7 @@ const breakpoints = [
             }// it can pottentially allow tabs to talk with each other
         ]
     },
+    */
     {
         proto: 'CSSStyleDeclaration',
         props: [
@@ -441,6 +453,7 @@ const breakpoints = [
             }
         ]
     },
+    /*
     {
         proto: 'Element',
         props: [],
@@ -460,6 +473,7 @@ const breakpoints = [
         ],
         methods: []
     },
+    */
     {
         proto: 'Sensor',
         props: [
@@ -488,6 +502,7 @@ const breakpoints = [
         ],
         methods: []
     },
+    /*
     {
         proto: 'Animation',
         props: [
@@ -524,6 +539,7 @@ const breakpoints = [
     //         {name: 'start'}
     //     ]
     // },
+    */
     {
         proto: 'Gyroscope',
         props: [
@@ -546,6 +562,16 @@ const breakpoints = [
     //         {name: 'start'}
     //     ]
     // }
+    {
+        proto: 'HTMLInputElement',
+        props: [
+            {
+                name: 'value',
+                description: 'Input element value',
+            }
+        ],
+        methods: []
+    },
 ];
 
 module.exports = breakpoints;
