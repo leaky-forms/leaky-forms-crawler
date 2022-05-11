@@ -45,3 +45,9 @@ To crawl 100K websites, we needed to split URLs into the lists containing 1K web
 
 ### After the crawl
 Crawler will store the data about the crawls in the directory that you passed the crawler. Crawler outputs are JSONs, log, PNGs and HTMLs. The HTML and PNGs can be used for the debugging but the JSONs and the log file will be used for the leak detection.
+
+
+
+https://user-images.githubusercontent.com/48864422/167825726-488118e9-470d-4883-a631-add5cf6e6967.mp4
+
+
