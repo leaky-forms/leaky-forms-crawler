@@ -7,7 +7,7 @@ Lastly, we used the Fathom-based email field detector model used in **[Firefox R
 
 email-field-collector branch contains the version that we used in our study. The main branch contains the rebased code.
 
-For a more detailed overview and access to the data visit the **[project's homepage](https://github.com/leaky-forms)**. This repository contains code for re-running web crawler. 
+For a more detailed overview and access to the data visit the **[project's homepage](https://homes.esat.kuleuven.be/~asenol/leaky-forms/)**. This repository contains code for re-running web crawler. 
 
 ### Installation
 - Clone this project locally (`git clone git@github.com:asumansenol/leaky-forms.git`)
