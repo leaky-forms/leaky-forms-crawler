@@ -48,6 +48,9 @@ Crawler will store the data about the crawls in the directory that you passed th
 
 
 
-https://user-images.githubusercontent.com/48864422/167825726-488118e9-470d-4883-a631-add5cf6e6967.mp4
+
+
+https://user-images.githubusercontent.com/48864422/167825848-507c7787-9acd-4258-b7b7-d21e8faa3888.mp4
+
 
 
