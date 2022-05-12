@@ -43,10 +43,8 @@ Below we give a description of the parameters that are passed to the crawler.
 ### Crawl setup
 To crawl 100K websites, we needed to split URLs into the lists containing 1K webistes in crux_urls filder due to the an issue on the TRC. That's why if you need to run crawl for more than 100K websites you can use the shell scripts crawl_in_parts.sh for the desktop and crawl_in_parts_mobile.sh for the mobile. These shell scripts waits for 6 arguments that you need to pass like the output folder name, email address that will be filled by the crawler etc.
 
-### After the crawl
-Crawler will store the data about the crawls in the directory that you passed the crawler. Crawler outputs are JSONs, log, PNGs and HTMLs. The HTML and PNGs can be used for the debugging but the JSONs and the log file will be used for the leak detection.
-
-
+### Crawl data
+Crawler will store the collected data in the output folder passed in the arguments. In addition to a crawl log file, the crawler creates a JSON containing request details, screenshots, and HTML source for each website. The JSONs and the log file are used in leak detection. The HTML source and screenshots can be used for debugging. 
 
 
 
